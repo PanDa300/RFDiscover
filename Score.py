@@ -51,6 +51,4 @@ def get_Score(r, RFDs):
     for k in RFDs:
         res += (get_Score1(r, k) + get_Score2(r, k)) / 2
         cnt += 1
-        if cnt % 50000 == 0:
-            break
     return res / cnt
