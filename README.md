@@ -1,5 +1,3 @@
-# RFDiscover
-RFD discover;cover set
 4 files
 
 
