@@ -4,7 +4,7 @@ RFD discover;cover set
 
 
 
-Method20230901. py main program
+RFDiscover. py main program
 
 The structure and relaxation function of relax.py storing RFD
 
