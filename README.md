@@ -98,27 +98,3 @@ total sulfur dioxide <= 48.99  -->  free sulfur dioxide <= 14   [support=44, con
 ...
 ```
 
-## 使用自己的数据
-
-1. 准备一个表头行 + 数值列的 CSV，放到任意位置；
-2. `python RFDiscover.py --csv 路径.csv --rows 100`；
-3. 非数值列会被自动跳过（`pre.py` 打印 `[pre] 跳过非数值列：...`）；
-4. 如果标识列不叫 `Id`/`index`/`Unnamed: 0`，建议先在 CSV 里改名或删除。
-
-## 说明
-
-- 只输出**置信度严格等于 1** 的规则，因此规则在给定数据上无反例；
-  若需要放宽，可去掉 `RFDiscover.py` 中 `confidence < 1` 的过滤。
-- `relax.py` 里 `candidate_thresholds()` 对每个属性的候选阈值做了上限压缩（默认 60 个分位点），
-  属性取值域很大时可通过 `mine_rfds(..., thr_cap=...)` 调整。
-- 仓库暂未附带开源许可证文件，如需复用请先与作者联系。
-
-## 引用
-
-```bibtex
-@inproceedings{rfdiscover2024,
-  title     = {Efficient Relaxed Functional Dependency Discovery},
-  booktitle = {IEEE International Conference on Data Engineering (ICDE)},
-  year      = {2024}
-}
-```
