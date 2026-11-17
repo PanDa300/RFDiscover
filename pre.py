@@ -1,36 +1,39 @@
-import numpy as np
+# -*- coding: utf-8 -*-
+"""数据读入
+
+* 路径相对本文件解析，从任何目录启动都能跑；
+* 属性名取 CSV 表头，"Id" 之类的列默认排除（可用 --keep-id 保留）；
+* 只保留能转成数值的列。
+"""
 import os
+
 import pandas as pd
 
+HERE = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_CSV = os.path.join(HERE, "WineQT.csv")
 
-def read_data(file_name):
-    path = os.getcwd() + file_name
-    f = open(path, encoding='utf-8')
-    data = pd.read_csv(f)
-    name_list = ["fixed acidity", "volatile acidity", "citric acid", "residual sugar", "chlorides"
-        , "free sulfur dioxide", "total sulfur dioxide", "density", "pH", "sulphates", "alcohol", "quality", "Id"]
-    data_x = data[name_list]
-    x = data_x.values
-    return x, name_list
+EXCLUDE_DEFAULT = {"id", "ID", "Id", "index", "Unnamed: 0"}
 
 
-def getDistanceRelation(r):
-    res = []
-    for i in range(len(r) - 1):
-        for j in range(i + 1, len(r)):
-            kk = []
-            for k in range(len(r[i])):
-                kk.append(abs(r[i][k] - r[j][k]))
-            res.append(kk)
-    res = np.array(res)
-    return res
+def load_csv(csv_path=DEFAULT_CSV, drop_id=True):
+    """读 CSV，返回 (数据矩阵 list[list[float]], 属性名列表)"""
+    with open(csv_path, encoding="utf-8") as fh:
+        df = pd.read_csv(fh)
+    names = [c for c in df.columns]
+    if drop_id:
+        names = [c for c in names if c.strip() not in EXCLUDE_DEFAULT and c.strip().lower() != "id"]
+    df = df[names]
+    numeric_names, cols = [], []
+    for c in names:
+        try:
+            cols.append([float(v) for v in df[c].tolist()])
+            numeric_names.append(c)
+        except (TypeError, ValueError):
+            print(f"[pre] 跳过非数值列：{c}")
+    matrix = [[cols[k][i] for k in range(len(cols))] for i in range(len(cols[0]))] if cols else []
+    return matrix, numeric_names
 
 
-def pre_glass(x):
-    data, label = read_data('\\WineQT.csv')
-
-    data = np.array(data)
-    data = data[:x]
-    Distance = getDistanceRelation(data)
-
-    return Distance, label
+def head(rows, n):
+    """取前 n 行"""
+    return [list(r) for r in rows[:n]]

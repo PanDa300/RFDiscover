@@ -1,79 +1,19 @@
-import numpy as np
+# -*- coding: utf-8 -*-
+"""差分关系构造与 RFD 挖掘
+
+对每个 (RHS 属性 y, RHS 阈值 t)：
+  1. 违约集合 V = {差分行 : dy > t}，这些行必须被 LHS 条件排除；
+  2. 在 1~max_lhs 个 LHS 属性上枚举阈值（阈值取自该属性出现过的差值）；
+  3. 阈值取"刚好低于某组违约行的最小差值"的整齐数（nice_below），
+     保证这些违约行在 <= 判定下必然被排除，即规则置信度 = 1；
+  4. 取支持度最大的候选。
+
+阈值向下取整到 4 位有效数字后再输出：既好读，也保证按打印值复算时仍然
+严格小于原边界（否则会因四舍五入多出一条反例）。
+"""
 import math
-import os
-import pandas as pd
-import random
 
-
-def rand(a, b):
-    return (b - a) * random.random() + a
-
-
-def make_matrix(m, n, fill=1.0):  # 创造一个指定大小的矩阵
-    mat = []
-    for i in range(m):
-        mat.append([fill] * n)
-    return mat
-
-
-def get_0_1_array(m, n, rate=0.2):
-    array = np.ones(m * n).reshape(m, n)
-    zeros_num = int(array.size * rate)  # 根据0的比率来得到 0的个数
-    new_array = np.ones(array.size)  # 生成与原来模板相同的矩阵，全为1
-    new_array[:zeros_num] = 0  # 将一部分换为0
-    np.random.shuffle(new_array)  # 将0和1的顺序打乱
-    re_array = new_array.reshape(array.shape)  # 重新定义矩阵的维度，与模板相同
-    return re_array.tolist()
-
-
-def read_data():
-    fileHandler1 = open("train_data", "r")
-    fileHandler2 = open("test_data", "r")
-    listOfLines1 = fileHandler1.readlines()
-    listOfLines2 = fileHandler2.readlines()
-    data1 = []
-    data2 = []
-
-    for line in listOfLines1:
-        newline = line.strip("\n").split(",")
-        newline_ = [float(x) for x in newline]
-        data1.append(newline_)
-
-    for line in listOfLines2:
-        newline = line.strip("\n").split(",")
-        newline_ = [float(x) for x in newline]
-        data2.append(newline_)
-    data1 = data2[:100]
-    data2 = data2[:1000]
-    return np.array(data1), np.array(data2)
-
-
-def get_index(x_list, i):
-    res = 0
-    for j in x_list:
-        if j > x_list[i]:
-            res += 1
-    return res
-
-
-def my_sort(x_list, k):
-    res = []
-    for i in range(len(x_list[0])):
-        xx = []
-        for j in range(len(x_list)):
-            xx.append(x_list[j][i])
-        res.append(get_index(xx, k))
-    return res
-
-
-def select_id(beta_1):
-    min_value = []
-    for j in range(len(beta_1[0])):
-        maxn = 0
-        for i in range(len(beta_1)):
-            maxn = max(maxn, beta_1[i][j])
-        min_value.append(maxn)
-    return min_value
+import numpy as np
 
 
 class FD:
@@ -81,76 +21,167 @@ class FD:
         self.LHS = LHS_list
         self.RHS = RHS
 
+    def __repr__(self):
+        return f"FD({self.LHS} -> {self.RHS})"
+
+
+def nice_below(v, digits=4):
+    """返回严格小于 v 的整齐数（保留 digits 位有效数字）。
+
+    例：nice_below(0.033) -> 0.03299；nice_below(49.0) -> 48.99。
+    这样打印出来（%.6g）再解析回来，仍然严格小于原始边界值。
+    """
+    v = float(v)
+    if v <= 0:
+        return 0.0
+    exp = int(math.floor(math.log10(abs(v))))
+    step = 10.0 ** (exp - digits + 1)
+    t = math.floor(v / step + 1e-12) * step
+    if t >= v:
+        t -= step
+    decimals = max(0, digits - 1 - exp)
+    return round(t, decimals)
+
+
+def nice_floor(v, digits=4):
+    """返回不大于 v 的整齐数（保留 digits 位有效数字）。
+
+    RHS 阈值取自数据里出现过的差值（如 0.6000000000000014），直接打印会显示成
+    0.6，与内部值不一致。先向下取整到整齐数，内部值与打印值就完全对得上。
+    """
+    v = float(v)
+    if v <= 0:
+        return 0.0
+    exp = int(math.floor(math.log10(abs(v))))
+    step = 10.0 ** (exp - digits + 1)
+    t = math.floor(v / step + 1e-12) * step
+    decimals = max(0, digits - 1 - exp)
+    return round(t, decimals)
+
 
 class RFD:
-    def __init__(self, FD, x):
-        self.LHS = []
-        for i in FD.LHS:
-            self.LHS.append((i, 0))
-        self.RHS = (FD.RHS, x)
+    """松弛函数依赖：(X, thr_X) -> (y, thr_y)
 
-    def generator(self, data):
+    LHS: [(属性下标, 阈值), ...]；RHS: (属性下标, 阈值)
+    support: 满足全部 LHS 条件的差分行数
+    """
 
-        beta_1 = [x for x in data if x[self.RHS[0]] <= self.RHS[1]]
-        beta_2 = [x for x in data if x[self.RHS[0]] > self.RHS[1]]
-        data = beta_2
-        ans = select_id(beta_1)
-        L_list = [x[0] for x in self.LHS]
-        for k in L_list:
-            flag = 0
-            ans1 = 999999999
-            ans2 = -999999999
-            for i in range(len(data)):
-                for j in L_list:
-                    if k == j:
-                        break
-                    if ans[j] <= data[i][j]:
-                        flag = 2
-                        ans1 = min(ans1, data[i][k])
-                    else:
-                        flag = 1
-                        ans2 = max(ans2, data[i][j])
-            if flag == 2:
-                ans[k] = ans1
-            elif flag == 1:
-                ans[k] = ans2
-        for i in range(len(self.LHS)):
-            self.LHS[i] = (self.LHS[i][0], ans[self.LHS[i][0]])
+    def __init__(self, LHS, RHS, support=0, total=0):
+        self.LHS = list(LHS)
+        self.RHS = RHS
+        self.support = support
+        self.total = total
 
-    def print(self):
-        for i in self.LHS:
-            print("[%d %.2f]" % (i[0], i[1]), end=',')
-        i = self.RHS
-        print("[%d %.2f]" % (i[0], i[1]))
+    def lhs_holds_mask(self, D):
+        m = np.ones(len(D), dtype=bool)
+        for a, t in self.LHS:
+            m &= D[:, a] <= t
+        return m
+
+    def rhs_holds_mask(self, D):
+        a, t = self.RHS
+        return D[:, a] <= t
+
+    def confidence(self, D):
+        lhs = self.lhs_holds_mask(D)
+        down = int(lhs.sum())
+        return 0.0 if down == 0 else int((lhs & self.rhs_holds_mask(D)).sum()) / down
+
+    def support_count(self, D):
+        return int(self.lhs_holds_mask(D).sum())
+
+    def key(self):
+        return (tuple(sorted(self.LHS)), self.RHS)
+
+    def __repr__(self):
+        lhs = ", ".join(f"{a}<={t:g}" for a, t in sorted(self.LHS))
+        return f"{lhs} -> {self.RHS[0]}<={self.RHS[1]:g}"
 
 
-def work(data, x):
-    x.generator(data)
-    return x
+def diff_relation(rows):
+    """两两绝对差分行"""
+    n = len(rows)
+    return [[abs(rows[i][k] - rows[j][k]) for k in range(len(rows[0]))]
+            for i in range(n - 1) for j in range(i + 1, n)]
 
 
-if __name__ == "__main__":
-    path = os.getcwd() + '\\123.csv'
-    f = open(path, encoding='utf-8')
-    data = pd.read_csv(f)
-    data = data[~data['result'].isin([-1])]
-    name_list = ["H2", "CH4", "C2H4", "C2H2", "C2H6", "CO", "CO2", "O2", "N2", "TOTALHYDROCARBON"]
-    data_x = data[name_list]
-    data_y = data['result']
-    x = data_x.values
-    y = data_y.values
-    if len(x) == 0:
-        print("all -1")
-        exit(0)
-    from sklearn.preprocessing import StandardScaler
+def candidate_thresholds(column, cap):
+    """候选阈值：该属性上出现过的差值；太多时按分位点压缩到 cap 个"""
+    vals = np.unique(column)
+    if len(vals) <= cap:
+        return vals
+    idx = np.linspace(0, len(vals) - 1, cap).round().astype(int)
+    return vals[idx]
 
-    stand1 = StandardScaler()
-    stand1.fit(x)
-    x = stand1.transform(x)
-    print(x.shape)
 
-    data = x
-    f = FD([1, 4, 5], 0)
-    x = RFD(f, 0.477055385001098)
-    y = work(data, x)
-    x.print()
+def _best_lhs_for(D, y, t, max_lhs, thr_cap):
+    """在 (y, t) 下找支持度最大的 1~max_lhs 属性 LHS（阈值取可行范围内最大）"""
+    n, A = D.shape
+    viol = D[:, y] > t          # 必须被 LHS 排除的差分行
+    if not viol.any():
+        return None             # RHS 对全部差分行都成立：平凡规则，不输出
+
+    others = [k for k in range(A) if k != y]
+    cands = []                  # (support, -len(LHS), 阈值和, LHS)
+
+    # --- 单属性 LHS：阈值取全部违约行在该属性上的最小值再降一格 ---
+    for k in others:
+        thr = nice_below(D[viol, k].min())
+        sup = int((D[:, k] <= thr).sum())
+        cands.append((sup, -1, thr, [(k, thr)]))
+
+    # --- 双属性：枚举 k1 阈值，k2 阈值取"刚好排除剩余违约行"的值 ---
+    if max_lhs >= 2:
+        for i, k1 in enumerate(others):
+            for thr1 in candidate_thresholds(D[:, k1], thr_cap):
+                if thr1 <= 0:
+                    continue
+                thr1 = float(nice_below(thr1))
+                rest = viol & (D[:, k1] <= thr1)     # k1 没排除掉的违约行
+                if not rest.any():
+                    continue                          # k1 已排干净，单属性候选已覆盖
+                for k2 in others[i + 1:]:
+                    thr2 = nice_below(D[rest, k2].min())
+                    sup = int(((D[:, k1] <= thr1) & (D[:, k2] <= thr2)).sum())
+                    cands.append((sup, -2, thr1 + thr2, [(k1, thr1), (k2, thr2)]))
+
+    if not cands:
+        return None
+    sup, neg_len, _, lhs = max(cands, key=lambda c: (c[0], c[1], c[2]))
+    return RFD(lhs, (y, t), support=sup, total=n)
+
+
+def mine_rfds(D, rhs_attrs=None, max_lhs=2, thr_cap=60, min_support=1, verbose=False):
+    """对每个 (RHS 属性, RHS 阈值) 求支持度最大的有效 RFD"""
+    D = np.asarray(D, dtype=float)
+    if D.ndim != 2 or D.shape[0] == 0:
+        return [], 0
+    n, A = D.shape
+    if rhs_attrs is None:
+        rhs_attrs = range(A)
+
+    found, tries = [], 0
+    for y in rhs_attrs:
+        rhs_candidates = sorted({nice_floor(t) for t in np.unique(D[:, y])})
+        for t in rhs_candidates:
+            tries += 1
+            rfd = _best_lhs_for(D, y, float(t), max_lhs, thr_cap)
+            if rfd is None or not rfd.LHS or rfd.support < min_support:
+                continue
+            # 逐条校验，只收无反例的规则
+            if rfd.confidence(D) < 1.0 - 1e-12:
+                continue
+            found.append(rfd)
+
+    if verbose:
+        print(f"[mine] 尝试 {tries} 个 (RHS属性, 阈值) 组合，得到 {len(found)} 条有效候选")
+
+    # 同一 LHS 只保留 RHS 阈值最紧（最强）的那条
+    best = {}
+    for r in found:
+        lhs_key = tuple(sorted(r.LHS))
+        if lhs_key not in best or r.RHS[1] < best[lhs_key].RHS[1]:
+            best[lhs_key] = r
+    rules = [r for r in best.values() if r.confidence(D) >= 1.0 - 1e-12]
+    rules.sort(key=lambda r: (-r.support, len(r.LHS), r.RHS[0], r.RHS[1]))
+    return rules, tries
